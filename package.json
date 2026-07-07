@@ -1,0 +1,196 @@
+{
+  "name": "worktrunk-sidebar",
+  "displayName": "Worktrunk Sidebar",
+  "description": "UI sidebar for managing git worktrees with worktrunk (wt): create, open in a new window, merge, and remove.",
+  "version": "0.0.2",
+  "publisher": "leo",
+  "engines": {
+    "vscode": "^1.84.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/leo/worktrunk-sidebar"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:worktrunkWorktrees"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "worktrunk",
+          "title": "Worktrunk",
+          "icon": "media/worktrunk.svg"
+        }
+      ]
+    },
+    "views": {
+      "worktrunk": [
+        {
+          "id": "worktrunkWorktrees",
+          "name": "Worktrees"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "worktrunkWorktrees",
+        "contents": "Open a folder inside a git repository to see and manage its worktrees.\n[Create Worktree](command:worktrunk.create)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "worktrunk.refresh",
+        "title": "Refresh",
+        "category": "Worktrunk",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "worktrunk.create",
+        "title": "Create Worktree…",
+        "category": "Worktrunk",
+        "icon": "$(add)"
+      },
+      {
+        "command": "worktrunk.openInNewWindow",
+        "title": "Open in New Window",
+        "category": "Worktrunk",
+        "icon": "$(empty-window)"
+      },
+      {
+        "command": "worktrunk.openInThisWindow",
+        "title": "Open in This Window",
+        "category": "Worktrunk",
+        "icon": "$(window)"
+      },
+      {
+        "command": "worktrunk.openTerminal",
+        "title": "Open Terminal Here",
+        "category": "Worktrunk",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "worktrunk.copyPath",
+        "title": "Copy Path",
+        "category": "Worktrunk",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "worktrunk.rename",
+        "title": "Rename Worktree…",
+        "category": "Worktrunk",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "worktrunk.merge",
+        "title": "Merge into Default Branch…",
+        "category": "Worktrunk",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "worktrunk.remove",
+        "title": "Remove Worktree…",
+        "category": "Worktrunk",
+        "icon": "$(trash)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "worktrunk.create",
+          "when": "view == worktrunkWorktrees",
+          "group": "navigation@1"
+        },
+        {
+          "command": "worktrunk.refresh",
+          "when": "view == worktrunkWorktrees",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "worktrunk.openInNewWindow",
+          "when": "view == worktrunkWorktrees && viewItem =~ /^worktree/",
+          "group": "inline@1"
+        },
+        {
+          "command": "worktrunk.rename",
+          "when": "view == worktrunkWorktrees && viewItem == worktree",
+          "group": "inline@2"
+        },
+        {
+          "command": "worktrunk.rename",
+          "when": "view == worktrunkWorktrees && viewItem == worktree",
+          "group": "2_util@1"
+        },
+        {
+          "command": "worktrunk.openInThisWindow",
+          "when": "view == worktrunkWorktrees && viewItem =~ /^worktree/",
+          "group": "1_open@1"
+        },
+        {
+          "command": "worktrunk.openInNewWindow",
+          "when": "view == worktrunkWorktrees && viewItem =~ /^worktree/",
+          "group": "1_open@2"
+        },
+        {
+          "command": "worktrunk.openTerminal",
+          "when": "view == worktrunkWorktrees && viewItem =~ /^worktree/",
+          "group": "1_open@3"
+        },
+        {
+          "command": "worktrunk.copyPath",
+          "when": "view == worktrunkWorktrees && viewItem =~ /^worktree/",
+          "group": "2_util@2"
+        },
+        {
+          "command": "worktrunk.merge",
+          "when": "view == worktrunkWorktrees && viewItem == worktree",
+          "group": "3_danger@1"
+        },
+        {
+          "command": "worktrunk.remove",
+          "when": "view == worktrunkWorktrees && viewItem == worktree",
+          "group": "3_danger@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Worktrunk",
+      "properties": {
+        "worktrunk.wtPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the `wt` binary. Leave empty to auto-detect (/opt/homebrew/bin/wt, /usr/local/bin/wt, ~/.cargo/bin/wt, then PATH)."
+        },
+        "worktrunk.openAfterCreate": {
+          "type": "boolean",
+          "default": false,
+          "description": "After creating a worktree, open it in a new window from the extension. Leave OFF if your worktrunk `post-switch` hook already opens the editor (avoids opening two windows)."
+        },
+        "worktrunk.createArgs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["--create"],
+          "description": "Arguments passed to `wt switch` when creating a worktree (before the branch name)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.84.0",
+    "typescript": "^5.4.0",
+    "@vscode/vsce": "^2.24.0"
+  }
+}
