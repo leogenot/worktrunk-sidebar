@@ -4,7 +4,8 @@ A VS Code activity-bar sidebar for managing git worktrees with [worktrunk](https
 
 ## Features
 
-- **Worktrees list** — every worktree for the current repo, with branch name, current/main markers, ahead/behind, and uncommitted diff counts. Live from `wt list --format json`.
+- **Worktrees list** — every worktree for the current repo, with branch name, commit age, ahead/behind, and `+/−` diff counts. Live from `wt list --format json`.
+- **Context-aware UI** — the worktree open in *this* window is highlighted (blue `◉`) and sorted to the top; worktrees with uncommitted changes are tinted like VS Code's git decorations. Icons: blue circle = this window · green star = current · repo = main · branch = others. The view header shows `repo · count` and the activity-bar icon carries a count badge.
 - **Click a worktree** → opens it in a **new window** (one window per worktree).
 - **Create Worktree** (`+` in the view title) → prompts for a branch name and runs `wt switch --create`.
 - **Rename** (pencil icon / right-click) → renames the local branch (`git branch -m`) and moves the worktree folder to match via `wt step relocate`. The remote branch and any open PR keep the old name. Offers to reopen the moved folder afterward.

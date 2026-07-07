@@ -2,7 +2,7 @@
   "name": "worktrunk-sidebar",
   "displayName": "Worktrunk Sidebar",
   "description": "UI sidebar for managing git worktrees with worktrunk (wt): create, open in a new window, merge, and remove.",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "leo",
   "engines": {
     "vscode": "^1.84.0"

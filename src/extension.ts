@@ -12,14 +12,66 @@ interface WtEntry {
   kind?: string;
   is_main?: boolean;
   is_current?: boolean;
-  commit?: { short_sha?: string; message?: string };
+  commit?: { short_sha?: string; message?: string; timestamp?: number };
   working_tree?: {
     staged?: boolean;
     modified?: boolean;
     untracked?: boolean;
+    renamed?: boolean;
+    deleted?: boolean;
     diff?: { added?: number; deleted?: number };
   };
   remote?: { ahead?: number; behind?: number };
+  repo?: { name?: string };
+}
+
+/** Strip a trailing slash so paths compare cleanly. */
+function norm(p: string): string {
+  return p.replace(/\/+$/, '');
+}
+
+/** Folder paths open in THIS editor window. */
+function currentWindowPaths(): Set<string> {
+  const set = new Set<string>();
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    set.add(norm(folder.uri.fsPath));
+  }
+  return set;
+}
+
+/** Does the worktree have uncommitted work? */
+function isDirty(entry: WtEntry): boolean {
+  const wt = entry.working_tree;
+  if (!wt) {
+    return false;
+  }
+  const diff = (wt.diff?.added ?? 0) + (wt.diff?.deleted ?? 0);
+  return Boolean(wt.staged || wt.modified || wt.untracked || wt.renamed || wt.deleted || diff);
+}
+
+/** Compact relative age, e.g. "2h", "3d". */
+function ago(timestamp?: number): string {
+  if (!timestamp) {
+    return '';
+  }
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000) - timestamp);
+  const units: [number, string][] = [
+    [60, 's'],
+    [60, 'm'],
+    [24, 'h'],
+    [30, 'd'],
+    [12, 'mo'],
+    [Number.POSITIVE_INFINITY, 'y'],
+  ];
+  let value = seconds;
+  for (let i = 0; i < units.length; i++) {
+    const [size, label] = units[i];
+    if (value < size || i === units.length - 1) {
+      return `${Math.floor(value)}${label}`;
+    }
+    value = value / size;
+  }
+  return '';
 }
 
 /** Resolve the `wt` binary. GUI-launched editors often lack Homebrew on PATH. */
@@ -114,8 +166,50 @@ async function getMainWorktreePath(cwd: string): Promise<string | undefined> {
   }
 }
 
+/**
+ * Tints tree rows and adds a small badge, like VS Code's own git decorations:
+ * blue "◉" for the worktree open in this window, and the modified color with a
+ * "●" for worktrees that have uncommitted changes.
+ */
+class WorktreeDecorations implements vscode.FileDecorationProvider {
+  private readonly emitter = new vscode.EventEmitter<undefined>();
+  readonly onDidChangeFileDecorations = this.emitter.event;
+  private readonly map = new Map<string, vscode.FileDecoration>();
+
+  update(entries: WtEntry[], windowPaths: Set<string>): void {
+    this.map.clear();
+    for (const entry of entries) {
+      const key = norm(entry.path);
+      if (windowPaths.has(key)) {
+        this.map.set(
+          key,
+          new vscode.FileDecoration('◉', 'Open in this window', new vscode.ThemeColor('charts.blue')),
+        );
+      } else if (isDirty(entry)) {
+        this.map.set(
+          key,
+          new vscode.FileDecoration(
+            '●',
+            'Uncommitted changes',
+            new vscode.ThemeColor('gitDecoration.modifiedResourceForeground'),
+          ),
+        );
+      }
+    }
+    this.emitter.fire(undefined);
+  }
+
+  provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
+    return this.map.get(norm(uri.fsPath));
+  }
+}
+
 class WorktreeItem extends vscode.TreeItem {
-  constructor(public readonly entry?: WtEntry, message?: string) {
+  constructor(
+    public readonly entry?: WtEntry,
+    message?: string,
+    isThisWindow = false,
+  ) {
     super(entry ? entry.branch : message ?? '', vscode.TreeItemCollapsibleState.None);
 
     if (!entry) {
@@ -127,12 +221,11 @@ class WorktreeItem extends vscode.TreeItem {
     this.resourceUri = vscode.Uri.file(entry.path);
     this.contextValue = entry.is_main ? 'worktreeMain' : 'worktree';
 
+    // Description: age · ahead/behind · diff — status/role are shown via icon + decoration.
     const parts: string[] = [];
-    if (entry.is_current) {
-      parts.push('● current');
-    }
-    if (entry.is_main) {
-      parts.push('main');
+    const age = ago(entry.commit?.timestamp);
+    if (age) {
+      parts.push(age);
     }
     const ahead = entry.remote?.ahead ?? 0;
     const behind = entry.remote?.behind ?? 0;
@@ -142,27 +235,19 @@ class WorktreeItem extends vscode.TreeItem {
     const added = entry.working_tree?.diff?.added ?? 0;
     const deleted = entry.working_tree?.diff?.deleted ?? 0;
     if (added || deleted) {
-      parts.push(`+${added}/-${deleted}`);
+      parts.push(`+${added}/−${deleted}`);
     }
-    const wt = entry.working_tree;
-    if (wt && (wt.staged || wt.modified || wt.untracked)) {
-      parts.push('✎');
-    }
-    this.description = parts.join('  ');
+    this.description = parts.join('  ·  ');
 
-    this.iconPath = entry.is_current
-      ? new vscode.ThemeIcon('star-full', new vscode.ThemeColor('charts.green'))
-      : entry.is_main
-        ? new vscode.ThemeIcon('repo')
-        : new vscode.ThemeIcon('git-branch');
+    this.iconPath = isThisWindow
+      ? new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('charts.blue'))
+      : entry.is_current
+        ? new vscode.ThemeIcon('star-full', new vscode.ThemeColor('charts.green'))
+        : entry.is_main
+          ? new vscode.ThemeIcon('repo')
+          : new vscode.ThemeIcon('git-branch');
 
-    const tip = new vscode.MarkdownString();
-    tip.appendMarkdown(`**${entry.branch}**\n\n`);
-    tip.appendMarkdown(`\`${entry.path}\`\n\n`);
-    if (entry.commit?.short_sha) {
-      tip.appendMarkdown(`${entry.commit.short_sha} — ${entry.commit.message ?? ''}`);
-    }
-    this.tooltip = tip;
+    this.tooltip = this.buildTooltip(entry, isThisWindow, ahead, behind, added, deleted);
 
     // Primary click action: open this worktree in a new window.
     this.command = {
@@ -171,11 +256,62 @@ class WorktreeItem extends vscode.TreeItem {
       arguments: [this],
     };
   }
+
+  private buildTooltip(
+    entry: WtEntry,
+    isThisWindow: boolean,
+    ahead: number,
+    behind: number,
+    added: number,
+    deleted: number,
+  ): vscode.MarkdownString {
+    const md = new vscode.MarkdownString(undefined, true);
+    const tags: string[] = [];
+    if (isThisWindow) {
+      tags.push('$(circle-filled) this window');
+    }
+    if (entry.is_current) {
+      tags.push('$(star-full) current');
+    }
+    if (entry.is_main) {
+      tags.push('$(repo) main');
+    }
+    md.appendMarkdown(`**${entry.branch}**`);
+    if (tags.length) {
+      md.appendMarkdown(`  —  ${tags.join('  ·  ')}`);
+    }
+    md.appendMarkdown('\n\n');
+    md.appendMarkdown(`$(folder) \`${entry.path}\`\n\n`);
+    if (entry.commit?.short_sha) {
+      const age = ago(entry.commit.timestamp);
+      md.appendMarkdown(
+        `$(git-commit) \`${entry.commit.short_sha}\` ${entry.commit.message ?? ''}` +
+          (age ? `  ·  ${age} ago` : '') +
+          '\n\n',
+      );
+    }
+    const meta: string[] = [];
+    if (ahead || behind) {
+      meta.push(`$(git-branch) ${ahead ? `↑${ahead} ` : ''}${behind ? `↓${behind}` : ''}`.trim());
+    }
+    if (added || deleted) {
+      meta.push(`$(diff) +${added} −${deleted}`);
+    } else if (!isDirty(entry)) {
+      meta.push('$(check) clean');
+    }
+    if (meta.length) {
+      md.appendMarkdown(meta.join('  ·  '));
+    }
+    return md;
+  }
 }
 
 class WorktreeProvider implements vscode.TreeDataProvider<WorktreeItem> {
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this._onDidChange.event;
+
+  view?: vscode.TreeView<WorktreeItem>;
+  decorations?: WorktreeDecorations;
 
   refresh(): void {
     this._onDidChange.fire();
@@ -185,17 +321,55 @@ class WorktreeProvider implements vscode.TreeDataProvider<WorktreeItem> {
     return item;
   }
 
+  /** Sort key: this-window → worktrunk-current → main → rest; ties by newest commit. */
+  private rank(entry: WtEntry, windowPaths: Set<string>): number {
+    if (windowPaths.has(norm(entry.path))) {
+      return 0;
+    }
+    if (entry.is_current) {
+      return 1;
+    }
+    if (entry.is_main) {
+      return 2;
+    }
+    return 3;
+  }
+
+  private setHeader(repo: string | undefined, count: number): void {
+    if (!this.view) {
+      return;
+    }
+    this.view.description = repo ? `${repo} · ${count}` : undefined;
+    this.view.badge = count
+      ? { value: count, tooltip: `${count} worktree${count === 1 ? '' : 's'}` }
+      : undefined;
+  }
+
   async getChildren(): Promise<WorktreeItem[]> {
     const cwd = getRepoCwd();
     if (!cwd) {
+      this.setHeader(undefined, 0);
       return []; // viewsWelcome handles the empty state.
     }
     try {
       const entries = await listWorktrees(cwd);
-      return entries.map((e) => new WorktreeItem(e));
+      const windowPaths = currentWindowPaths();
+      this.decorations?.update(entries, windowPaths);
+
+      entries.sort(
+        (a, b) =>
+          this.rank(a, windowPaths) - this.rank(b, windowPaths) ||
+          (b.commit?.timestamp ?? 0) - (a.commit?.timestamp ?? 0),
+      );
+
+      const repo = entries[0]?.repo?.name;
+      this.setHeader(repo, entries.length);
+
+      return entries.map((e) => new WorktreeItem(e, undefined, windowPaths.has(norm(e.path))));
     } catch (err) {
       const e = err as { stderr?: string; message?: string };
       const detail = (e.stderr && e.stderr.trim()) || e.message || 'wt list failed';
+      this.setHeader(undefined, 0);
       return [new WorktreeItem(undefined, detail.split('\n')[0])];
     }
   }
@@ -203,10 +377,14 @@ class WorktreeProvider implements vscode.TreeDataProvider<WorktreeItem> {
 
 export function activate(context: vscode.ExtensionContext): void {
   const provider = new WorktreeProvider();
+  const decorations = new WorktreeDecorations();
   const view = vscode.window.createTreeView('worktrunkWorktrees', {
     treeDataProvider: provider,
     showCollapseAll: false,
   });
+  provider.view = view;
+  provider.decorations = decorations;
+  context.subscriptions.push(vscode.window.registerFileDecorationProvider(decorations));
 
   // Refresh when the panel becomes visible and on window focus.
   view.onDidChangeVisibility((e) => {
