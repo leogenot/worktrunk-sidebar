@@ -166,6 +166,52 @@ async function getMainWorktreePath(cwd: string): Promise<string | undefined> {
   }
 }
 
+type CreateResult = 'created' | 'switched' | 'failed';
+
+/**
+ * Create a worktree for a new branch. worktrunk rejects `--create` when the
+ * branch already exists, so on that specific error we fall back to a plain
+ * `wt switch`, which opens (or creates a worktree for) the existing branch.
+ */
+async function createOrSwitchWorktree(name: string, cwd: string): Promise<CreateResult> {
+  const createArgs =
+    vscode.workspace.getConfiguration('worktrunk').get<string[]>('createArgs') ?? ['--create'];
+  const wt = resolveWt();
+  const run = (args: string[]) =>
+    execFileAsync(wt, args, { cwd, env: hookEnv(), maxBuffer: 32 * 1024 * 1024 });
+  const stderrOf = (err: unknown) => ((err as { stderr?: string }).stderr ?? '').trim();
+  const detailOf = (err: unknown) =>
+    (stderrOf(err) || (err as { message?: string }).message || 'unknown error').trim();
+
+  return vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: `Preparing worktree ${name}…`,
+      cancellable: false,
+    },
+    async () => {
+      try {
+        await run(['switch', ...createArgs, name, '-y']);
+        return 'created';
+      } catch (err) {
+        if (/already exists/i.test(stderrOf(err))) {
+          try {
+            await run(['switch', name, '-y']);
+            return 'switched';
+          } catch (switchErr) {
+            vscode.window.showErrorMessage(`wt switch ${name} failed: ${detailOf(switchErr)}`);
+            return 'failed';
+          }
+        }
+        vscode.window.showErrorMessage(
+          `wt switch ${createArgs.join(' ')} ${name} failed: ${detailOf(err)}`,
+        );
+        return 'failed';
+      }
+    },
+  );
+}
+
 /**
  * Tints tree rows and adds a small badge, like VS Code's own git decorations:
  * blue "◉" for the worktree open in this window, and the modified color with a
@@ -454,23 +500,21 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       const name = branch.trim();
-      const cfg = vscode.workspace.getConfiguration('worktrunk');
-      const createArgs = cfg.get<string[]>('createArgs') ?? ['--create'];
-      const ok = await runWt(['switch', ...createArgs, name, '-y'], cwd, `Creating worktree ${name}…`);
-      if (!ok) {
+      const result = await createOrSwitchWorktree(name, cwd);
+      if (result === 'failed') {
         return;
       }
       provider.refresh();
-      if (cfg.get<boolean>('openAfterCreate')) {
+      if (result === 'switched') {
+        vscode.window.setStatusBarMessage(`Branch “${name}” already existed — opened it`, 4000);
+      }
+      if (vscode.workspace.getConfiguration('worktrunk').get<boolean>('openAfterCreate')) {
         try {
-          const entries = await listWorktrees(cwd);
-          const created = entries.find((e) => e.branch === name);
-          if (created) {
-            void vscode.commands.executeCommand(
-              'vscode.openFolder',
-              vscode.Uri.file(created.path),
-              { forceNewWindow: true },
-            );
+          const target = (await listWorktrees(cwd)).find((e) => e.branch === name);
+          if (target) {
+            void vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(target.path), {
+              forceNewWindow: true,
+            });
           }
         } catch {
           /* refresh already happened; ignore lookup failure */
